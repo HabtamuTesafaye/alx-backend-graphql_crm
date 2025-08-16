@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from decimal import Decimal
 from datetime import datetime
+from django.utils import timezone
 from .filters import CustomerFilter, ProductFilter, OrderFilter
 from graphene_django.filter import DjangoFilterConnectionField
 
@@ -101,26 +102,29 @@ class BulkCreateCustomers(graphene.Mutation):
         created_customers = []
         errors = []
 
-        with transaction.atomic():
-            for data in input:
-                try:
-                    if Customer.objects.filter(email=data.email).exists():
-                        errors.append(f"Email already exists: {data.email}")
-                        continue
+        # Process each customer individually to support partial success
+        for i, data in enumerate(input):
+            try:
+                # Check for duplicate email
+                if Customer.objects.filter(email=data.email).exists():
+                    errors.append(f"Customer {i+1}: Email already exists: {data.email}")
+                    continue
 
-                    if data.phone and not re.match(r'^(\+\d{10,15}|\d{3}-\d{3}-\d{4})$', data.phone):
-                        errors.append(f"Invalid phone: {data.phone}")
-                        continue
+                # Validate phone format
+                if data.phone and not re.match(r'^(\+\d{10,15}|\d{3}-\d{3}-\d{4})$', data.phone):
+                    errors.append(f"Customer {i+1}: Invalid phone format: {data.phone}")
+                    continue
 
-                    cust = Customer.objects.create(
-                        name=data.name,
-                        email=data.email,
-                        phone=data.phone
-                    )
-                    created_customers.append(cust)
+                # Create customer
+                customer = Customer.objects.create(
+                    name=data.name,
+                    email=data.email,
+                    phone=data.phone
+                )
+                created_customers.append(customer)
 
-                except Exception as e:
-                    errors.append(str(e))
+            except Exception as e:
+                errors.append(f"Customer {i+1}: {str(e)}")
 
         return BulkCreateCustomers(customers=created_customers, errors=errors)
 
@@ -154,23 +158,52 @@ class CreateOrder(graphene.Mutation):
     order = graphene.Field(OrderType)
 
     def mutate(self, info, input):
+        # Helper function to extract database ID from Node ID
+        def get_database_id(node_id):
+            try:
+                # Try to decode as Node ID first
+                from graphql_relay import from_global_id
+                _, db_id = from_global_id(node_id)
+                return int(db_id)
+            except:
+                # If that fails, assume it's already a database ID
+                try:
+                    return int(node_id)
+                except ValueError:
+                    raise ValidationError(f"Invalid ID format: {node_id}")
+        
+        # Validate customer ID
         try:
-            customer = Customer.objects.get(id=input.customerId)
+            customer_db_id = get_database_id(input.customerId)
+            customer = Customer.objects.get(id=customer_db_id)
         except Customer.DoesNotExist:
             raise ValidationError("Invalid customer ID")
+        except Exception as e:
+            raise ValidationError(f"Invalid customer ID format: {str(e)}")
 
-        products = Product.objects.filter(id__in=input.productIds)
+        # Validate product IDs
+        if not input.productIds:
+            raise ValidationError("At least one product must be selected")
+        
+        try:
+            product_db_ids = [get_database_id(pid) for pid in input.productIds]
+        except Exception as e:
+            raise ValidationError(f"Invalid product ID format: {str(e)}")
+            
+        products = Product.objects.filter(id__in=product_db_ids)
         if not products.exists():
             raise ValidationError("No valid products found")
         if products.count() != len(input.productIds):
             raise ValidationError("Some product IDs are invalid")
 
+        # Calculate total amount accurately
         total_amount = sum(p.price for p in products)
 
+        # Create order with proper datetime handling
         order = Order.objects.create(
             customer=customer,
             total_amount=total_amount,
-            order_date=input.orderDate or datetime.now()
+            order_date=input.orderDate or timezone.now()
         )
         order.products.set(products)
 
@@ -201,7 +234,13 @@ class Query(graphene.ObjectType):
 # Mutation
 class Mutation(graphene.ObjectType):
     create_customer = CreateCustomer.Field()
-    bulk_create_customers = BulkCreateCustomers.Field()
+    bulk_create_customers = BulkCreateCustomers.Field() 
     create_product = CreateProduct.Field()
     create_order = CreateOrder.Field()
+    
+    # Also provide camelCase aliases for GraphQL compatibility
+    createCustomer = CreateCustomer.Field()
+    bulkCreateCustomers = BulkCreateCustomers.Field()
+    createProduct = CreateProduct.Field()
+    createOrder = CreateOrder.Field()
 

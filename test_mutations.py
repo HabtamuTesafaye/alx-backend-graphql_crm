@@ -104,7 +104,7 @@ def test_create_product():
     
     query = """
     mutation {
-      createProduct(input: { name: "Laptop", price: "999.99", stock: 10 }) {
+      createProduct(input: { name: "Laptop", price: 999.99, stock: 10 }) {
         product {
           id
           name
