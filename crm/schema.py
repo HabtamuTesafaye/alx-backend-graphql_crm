@@ -15,58 +15,94 @@ class CustomerType(DjangoObjectType):
         interfaces = (graphene.relay.Node,)  # Relay node for DjangoFilterConnectionField
 
 class ProductType(DjangoObjectType):
+    price = graphene.Float()  # Override to use Float instead of Decimal
+    
     class Meta:
         model = Product
         interfaces = (graphene.relay.Node,)
+        
+    def resolve_price(self, info):
+        return float(self.price)
 
 class OrderType(DjangoObjectType):
+    totalAmount = graphene.Float()
+    orderDate = graphene.DateTime()
+    products = graphene.List(ProductType)  # Override the default connection
+    
     class Meta:
         model = Order
-        interfaces = (graphene.relay.Node,)
+        # Remove relay interface to avoid connection issues
+        # interfaces = (graphene.relay.Node,)
+        
+    def resolve_totalAmount(self, info):
+        return float(self.total_amount)
+        
+    def resolve_orderDate(self, info):
+        return self.order_date
+        
+    def resolve_products(self, info):
+        return self.products.all()
 
 
-# Define the input type correctly
+# Define input types
 class CustomerInput(graphene.InputObjectType):
     name = graphene.String(required=True)
     email = graphene.String(required=True)
     phone = graphene.String()
 
+class CreateCustomerInput(graphene.InputObjectType):
+    name = graphene.String(required=True)
+    email = graphene.String(required=True)
+    phone = graphene.String()
+
+class CreateProductInput(graphene.InputObjectType):
+    name = graphene.String(required=True)
+    price = graphene.Float(required=True)
+    stock = graphene.Int()
+
+class CreateOrderInput(graphene.InputObjectType):
+    customerId = graphene.ID(required=True)
+    productIds = graphene.List(graphene.ID, required=True)
+    orderDate = graphene.DateTime()
+
 
 # CreateCustomer Mutation
 class CreateCustomer(graphene.Mutation):
     class Arguments:
-        name = graphene.String(required=True)
-        email = graphene.String(required=True)
-        phone = graphene.String(required=False)
+        input = CreateCustomerInput(required=True)
 
     customer = graphene.Field(CustomerType)
     message = graphene.String()
 
-    def mutate(self, info, name, email, phone=None):
-        if Customer.objects.filter(email=email).exists():
+    def mutate(self, info, input):
+        if Customer.objects.filter(email=input.email).exists():
             raise ValidationError("Email already exists")
 
-        if phone and not re.match(r'^(\+\d{10,15}|\d{3}-\d{3}-\d{4})$', phone):
+        if input.phone and not re.match(r'^(\+\d{10,15}|\d{3}-\d{3}-\d{4})$', input.phone):
             raise ValidationError("Invalid phone number format")
 
-        customer = Customer.objects.create(name=name, email=email, phone=phone)
+        customer = Customer.objects.create(
+            name=input.name,
+            email=input.email,
+            phone=input.phone
+        )
         return CreateCustomer(customer=customer, message="Customer created successfully")
 
 
 # BulkCreateCustomers Mutation
 class BulkCreateCustomers(graphene.Mutation):
     class Arguments:
-        customers = graphene.List(graphene.NonNull(CustomerInput), required=True)
+        input = graphene.List(graphene.NonNull(CustomerInput), required=True)
 
     customers = graphene.List(CustomerType)
     errors = graphene.List(graphene.String)
 
-    def mutate(self, info, customers):
+    def mutate(self, info, input):
         created_customers = []
         errors = []
 
         with transaction.atomic():
-            for data in customers:
+            for data in input:
                 try:
                     if Customer.objects.filter(email=data.email).exists():
                         errors.append(f"Email already exists: {data.email}")
@@ -92,41 +128,41 @@ class BulkCreateCustomers(graphene.Mutation):
 # CreateProduct Mutation
 class CreateProduct(graphene.Mutation):
     class Arguments:
-        name = graphene.String(required=True)
-        price = graphene.Decimal(required=True)
-        stock = graphene.Int(required=False, default_value=0)
+        input = CreateProductInput(required=True)
 
     product = graphene.Field(ProductType)
 
-    def mutate(self, info, name, price, stock):
-        if Decimal(price) <= 0:
+    def mutate(self, info, input):
+        if Decimal(input.price) <= 0:
             raise ValidationError("Price must be positive")
-        if stock < 0:
+        if input.stock is not None and input.stock < 0:
             raise ValidationError("Stock cannot be negative")
 
-        product = Product.objects.create(name=name, price=price, stock=stock)
+        product = Product.objects.create(
+            name=input.name,
+            price=input.price,
+            stock=input.stock if input.stock is not None else 0
+        )
         return CreateProduct(product=product)
 
 
 # CreateOrder Mutation
 class CreateOrder(graphene.Mutation):
     class Arguments:
-        customer_id = graphene.ID(required=True)
-        product_ids = graphene.List(graphene.ID, required=True)
-        order_date = graphene.DateTime(required=False)
+        input = CreateOrderInput(required=True)
 
     order = graphene.Field(OrderType)
 
-    def mutate(self, info, customer_id, product_ids, order_date=None):
+    def mutate(self, info, input):
         try:
-            customer = Customer.objects.get(id=customer_id)
+            customer = Customer.objects.get(id=input.customerId)
         except Customer.DoesNotExist:
             raise ValidationError("Invalid customer ID")
 
-        products = Product.objects.filter(id__in=product_ids)
+        products = Product.objects.filter(id__in=input.productIds)
         if not products.exists():
             raise ValidationError("No valid products found")
-        if products.count() != len(product_ids):
+        if products.count() != len(input.productIds):
             raise ValidationError("Some product IDs are invalid")
 
         total_amount = sum(p.price for p in products)
@@ -134,7 +170,7 @@ class CreateOrder(graphene.Mutation):
         order = Order.objects.create(
             customer=customer,
             total_amount=total_amount,
-            order_date=order_date or datetime.now()
+            order_date=input.orderDate or datetime.now()
         )
         order.products.set(products)
 
@@ -145,7 +181,8 @@ class CreateOrder(graphene.Mutation):
 class Query(graphene.ObjectType):
     all_customers = DjangoFilterConnectionField(CustomerType, filterset_class=CustomerFilter)
     all_products = DjangoFilterConnectionField(ProductType, filterset_class=ProductFilter)
-    all_orders = DjangoFilterConnectionField(OrderType, filterset_class=OrderFilter)
+    # Remove all_orders from connection field since OrderType doesn't have relay interface
+    # all_orders = DjangoFilterConnectionField(OrderType, filterset_class=OrderFilter)
 
     # Keep your old simple lists as well if you want
     customers = graphene.List(CustomerType)
