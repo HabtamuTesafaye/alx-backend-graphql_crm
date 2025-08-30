@@ -1,5 +1,5 @@
 #!/bin/bash
-# Script to clean up inactive customers (no orders in a year)
+# Script to clean up inactive customers (no orders in the past year)
 
 # Navigate to project root
 cd "$(dirname "$0")/../.."
@@ -12,7 +12,7 @@ from datetime import timedelta
 
 cutoff = timezone.now() - timedelta(days=365)
 
-# Customers who have orders in the last year
+# Customers with orders in the last year
 active_customers = Customer.objects.filter(order__order_date__gte=cutoff).distinct()
 
 # Inactive customers = all customers except active ones
@@ -24,4 +24,4 @@ print(count)
 ")
 
 # Log result with timestamp
-echo \"$(date '+%Y-%m-%d %H:%M:%S') Deleted customers: $deleted_count\" >> /tmp/customer_cleanup_log.txt
+echo \"$(date '+%Y-%m-%d %H:%M:%S') Deleted inactive customers: $deleted_count\" >> /tmp/customer_cleanup_log.txt
