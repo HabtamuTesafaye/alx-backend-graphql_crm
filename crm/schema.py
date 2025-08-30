@@ -1,7 +1,7 @@
 import re
 import graphene
 from graphene_django import DjangoObjectType
-from .models import Customer, Product, Order
+from crm.models import Customer, Product, Order
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from decimal import Decimal
