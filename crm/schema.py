@@ -244,3 +244,41 @@ class Mutation(graphene.ObjectType):
     createProduct = CreateProduct.Field()
     createOrder = CreateOrder.Field()
 
+# UpdateLowStockProducts Mutation
+class UpdateLowStockProducts(graphene.Mutation):
+    class Arguments:
+        pass  # no args, runs automatically
+
+    updated_products = graphene.List(ProductType)
+    message = graphene.String()
+
+    def mutate(self, info):
+        low_stock_products = Product.objects.filter(stock__lt=10)
+        updated = []
+
+        for product in low_stock_products:
+            product.stock += 10  # simulate restocking
+            product.save()
+            updated.append(product)
+
+        return UpdateLowStockProducts(
+            updated_products=updated,
+            message=f"{len(updated)} products were updated"
+        )
+
+
+# Mutation
+class Mutation(graphene.ObjectType):
+    create_customer = CreateCustomer.Field()
+    bulk_create_customers = BulkCreateCustomers.Field() 
+    create_product = CreateProduct.Field()
+    create_order = CreateOrder.Field()
+    
+    # Aliases
+    createCustomer = CreateCustomer.Field()
+    bulkCreateCustomers = BulkCreateCustomers.Field()
+    createProduct = CreateProduct.Field()
+    createOrder = CreateOrder.Field()
+
+    # ✅ New mutation
+    updateLowStockProducts = UpdateLowStockProducts.Field()
